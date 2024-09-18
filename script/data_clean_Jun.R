@@ -199,3 +199,54 @@ p5 <- ggplot(delay.onset.adm) +
   labs(x = "Delay from onset to admission (days)", y = "Probabolity") + 
   theme_bw()
 p5
+
+
+### serial interval
+serial.interval <- linelist %>% 
+  filter(infector != "NA") %>% 
+  dplyr::select(case.ID, infector, infectee.onset = date.of.onset) %>% 
+  left_join(dplyr::select(linelist, case.ID, date.of.onset), by = c("infector" = "case.ID")) %>% 
+  rename(infector.onset = date.of.onset) %>% 
+  mutate(SI = infectee.onset - infector.onset) %>% 
+  mutate(SI = as.integer(SI))
+
+# check delay values
+range(serial.interval$SI)
+
+p6 <- ggplot(serial.interval) + 
+  geom_histogram(aes(x = SI, y = ..density..), binwidth = 1, color = "white") + 
+  labs(x = "Serial interval (days)", y = "Probability") + 
+  theme_bw()
+p6
+
+# fit a gamma distribution
+fit.gamma <- fitdist(serial.interval$SI + 0.5, distr = "gamma", method = "mle")
+summary(fit.gamma)
+plot(fit.gamma)
+
+# mean delay
+shape <- fit.gamma$estimate[1]
+rate <- fit.gamma$estimate[2]
+(mean.SI <- shape / rate - 0.5)
+
+# add fitted gamma distribution
+delay.SI <- serial.interval %>% 
+  dplyr::select(delays = SI) %>% 
+  group_by(delays) %>% 
+  summarise(n = n()) %>% 
+  mutate(freq = n / sum(n))
+
+delays <- seq(range(delay.SI$delays)[1], range(delay.SI$delays)[2])
+delay.SI <- data.frame(delays) %>% 
+  left_join(delay.SI, by = "delays") %>% 
+  replace(is.na(.), 0)
+
+fit.den <- dgamma(delays + 0.5, shape = shape, rate = rate)
+delay.SI <- cbind(delay.SI, fit.den)
+
+p7 <- ggplot(delay.SI) + 
+  geom_bar(aes(x = delays, y = freq), stat = "identity") + 
+  geom_line(aes(x = delays, y = fit.den), color = "red") + 
+  labs(x = "Serial interval (days)", y = "Probabolity") + 
+  theme_bw()
+p7
