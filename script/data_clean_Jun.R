@@ -2,6 +2,8 @@ library(readxl)
 library(tidyverse)
 library(incidence)
 library(fitdistrplus)
+library(ISOweek)
+library(EpiEstim)
 
 linelist <- read_xlsx("../data/EbolaLineList-Freetown_Practical.xlsx", sheet = 1)
 colnames(linelist) <- make.names(colnames(linelist))
@@ -153,7 +155,8 @@ CFR.hosp <- cases.hosp %>%
   mutate(CFR = deaths / cases)
 
 
-## Day 2
+#### Day 2 ####
+## Describe relevant delays
 ### delay from onset to admission
 linelist <- linelist %>% 
   mutate(delay.onset.adm = date.of.hospitalisation - date.of.onset) %>% 
@@ -228,6 +231,7 @@ plot(fit.gamma)
 shape <- fit.gamma$estimate[1]
 rate <- fit.gamma$estimate[2]
 (mean.SI <- shape / rate - 0.5)
+(var.SI <- shape / (rate * rate))
 
 # add fitted gamma distribution
 delay.SI <- serial.interval %>% 
@@ -295,3 +299,108 @@ plot(fit.gamma.after)
 shape <- fit.gamma.after$estimate[1]
 rate <- fit.gamma.after$estimate[2]
 (mean.SI.after <- shape / rate - 0.5)
+
+
+## Simple projetion
+linelist <- linelist %>% 
+  mutate(isoweek = date2ISOweek(date.of.onset)) %>% 
+  mutate(year.week = str_sub(isoweek, start = 1, end = 8))
+
+weekly.inc <- linelist %>% 
+  group_by(year.week) %>% 
+  summarise(n = n()) %>% 
+  mutate(weeknum = row_number(), 
+         weekending = str_c(year.week, "-7")) %>% 
+  mutate(weekending = ISOweek2date(weekending)) %>% 
+  mutate(intervention = ifelse(weekending < as.Date("2014-09-23"), "before", "after")) %>% 
+  mutate(intervention = factor(intervention, levels = c("before", "after")))
+
+# plot weekly incidence
+p9 <- ggplot(weekly.inc) + 
+  geom_bar(aes(x = weekending, y = n), stat = "identity") + 
+  geom_vline(xintercept = as.Date("2014-09-23"), color = "red") + 
+  labs(x = "Symptom onset", y = "Weekly incidence") + 
+  theme_bw()
+p9
+
+# fit a linear regression before intervention
+weekly.inc.before <- weekly.inc %>% 
+  filter(intervention == "before")
+
+fit.lm.before <- lm(log(n) ~ weeknum, data = weekly.inc.before)
+summary(fit.lm.before)
+
+# fit a linear regression after intervention
+weekly.inc.after <- weekly.inc %>% 
+  filter(intervention == "after")
+
+fit.lm.after <- lm(log(n) ~ weeknum, data = weekly.inc.after)
+summary(fit.lm.after)
+
+# fitted values
+fitted.before <- exp(predict(fit.lm.before, data = weeknum, level = 0.95, interval = "confidence"))
+weekly.inc.before <- cbind(weekly.inc.before, fitted.before)
+
+fitted.after <- exp(predict(fit.lm.after, data = weeknum, level = 0.95, interval = "confidence"))
+weekly.inc.after <- cbind(weekly.inc.after, fitted.after)
+
+weekly.inc.fitted <- rbind(weekly.inc.before, weekly.inc.after)
+
+# plot weekly incidence with fitted model
+p10 <- ggplot(weekly.inc.fitted) + 
+  geom_bar(aes(x = weekending, y = n), stat = "identity") + 
+  geom_vline(xintercept = as.Date("2014-09-23"), color = "red") + 
+  geom_ribbon(aes(x = weekending, ymin = lwr, ymax = upr, fill = intervention), alpha = 0.3) + 
+  geom_line(aes(x = weekending, y = fit, color = intervention)) + 
+  labs(x = "Symptom onset", y = "Weekly incidence") + 
+  theme_bw() + 
+  theme(legend.position = c(0.8, 0.8))
+p10
+
+# daily growth rate
+(r.before <- fit.lm.before$coefficients[2] / 7)
+(r.after <- fit.lm.after$coefficients[2] / 7)
+
+# doubling time or halving time
+(dt.before <- log(2) / r.before)
+(ht.after <- log(2) / abs(r.after))
+
+# Reproduction number
+Tinf <- 5.2
+Tinc <- 9.92
+Tg <- Tinf + Tinc
+(R.before <- (1 + r.before * Tinf) * (1 + r.before * Tinc))
+(R.after <- (1 + r.after * Tinf) * (1 + r.after * Tinc))
+
+# forward projection
+fp <- exp(predict(fit.lm.after, new = data.frame(weeknum = max(weekly.inc$weeknum) + 1:30), 
+                  level = 0.95, interval = "confidence"))
+fp
+
+
+## Assess temporal variations in R
+daily.inc <- inc.sym.onset %>% 
+  rename(I = n) %>% 
+  replace(is.na(.), 0)
+
+res_parametric_si <- estimate_R(daily.inc$I, 
+                                method = "parametric_si",
+                                config = make_config(list(
+                                  mean_si = mean.SI, 
+                                  std_si = sqrt(var.SI)))
+                                )
+head(res_parametric_si$R)
+plot(res_parametric_si, legend = FALSE)
+
+# reproduction number before and after interventions
+as.integer(as.Date("2014-09-23") - min(daily.inc$date.of.onset)) + 1
+res_parametric_si <- estimate_R(daily.inc$I, 
+                                method = "parametric_si",
+                                config = make_config(list(
+                                  mean_si = mean.SI, 
+                                  std_si = sqrt(var.SI), 
+                                  t_start = c(2, 170), 
+                                  t_end = c(171, 389)))
+)
+head(res_parametric_si$R)
+plot(res_parametric_si, legend = FALSE)
