@@ -250,3 +250,48 @@ p7 <- ggplot(delay.SI) +
   labs(x = "Serial interval (days)", y = "Probabolity") + 
   theme_bw()
 p7
+
+
+# stratify serial interval before and after the interventions (2014-09-23)
+serial.interval <- serial.interval %>% 
+  mutate(intervention = ifelse(infector.onset < as.Date("2014-09-23"), "before", "after")) %>% 
+  mutate(intervention = factor(intervention, levels = c("before", "after")))
+
+p8 <- ggplot(serial.interval) + 
+  geom_histogram(aes(x = SI, y = ..density..), binwidth = 1, color = "white") + 
+  labs(x = "Serial interval (days)", y = "Probability") + 
+  theme_bw() + 
+  facet_wrap(~ intervention)
+p8
+
+# fit a gamma distribution of serial intervals before interventions
+serial.interval.before <- serial.interval %>% 
+  filter(intervention == "before")
+
+# check SI values
+range(serial.interval.before$SI)
+
+fit.gamma.before <- fitdist(serial.interval.before$SI + 0.5, distr = "gamma", method = "mle")
+summary(fit.gamma.before)
+plot(fit.gamma.before)
+
+# mean delay
+shape <- fit.gamma.before$estimate[1]
+rate <- fit.gamma.before$estimate[2]
+(mean.SI.before <- shape / rate - 0.5)
+
+# fit a gamma distribution of serial intervals after interventions
+serial.interval.after <- serial.interval %>% 
+  filter(intervention == "after")
+
+# check SI values
+range(serial.interval.after$SI)
+
+fit.gamma.after <- fitdist(serial.interval.after$SI + 0.5, distr = "gamma", method = "mle")
+summary(fit.gamma.after)
+plot(fit.gamma.after)
+
+# mean delay
+shape <- fit.gamma.after$estimate[1]
+rate <- fit.gamma.after$estimate[2]
+(mean.SI.after <- shape / rate - 0.5)
